@@ -8,7 +8,8 @@ import json
 import logging
 from datetime import datetime, timedelta
 from typing import List, Dict, Optional
-from flask import Flask, render_template, jsonify, request
+from functools import wraps
+from flask import Flask, render_template, jsonify, request, Response
 from config import Config
 
 logging.basicConfig(level=logging.INFO)
@@ -16,6 +17,27 @@ logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 config = Config()
+
+def check_auth(username, password):
+    """Check if username/password combination is valid"""
+    return username == config.WEB_USERNAME and password == config.WEB_PASSWORD
+
+def authenticate():
+    """Send 401 response that enables basic auth"""
+    return Response(
+        'Authentication required\n'
+        'Please provide valid credentials', 401,
+        {'WWW-Authenticate': 'Basic realm="Solar Monitor"'})
+
+def requires_auth(f):
+    """Decorator for routes that require authentication"""
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        auth = request.authorization
+        if not auth or not check_auth(auth.username, auth.password):
+            return authenticate()
+        return f(*args, **kwargs)
+    return decorated
 
 class DataReader:
     """Read and process temperature data files"""
@@ -30,16 +52,24 @@ class DataReader:
         
         files = []
         for filename in os.listdir(self.config.DATA_DIR):
-            if filename.startswith(self.config.LOG_FILE_PREFIX) and filename.endswith('.json'):
+            if filename.startswith(self.config.LOG_FILE_PREFIX) and (filename.endswith('.json') or filename.endswith('.jsonl')):
                 files.append(os.path.join(self.config.DATA_DIR, filename))
         
         return sorted(files)
     
     def read_data_file(self, filepath: str) -> List[Dict]:
-        """Read data from a single file"""
+        """Read data from a single file (supports both JSON and JSONL formats)"""
         try:
             with open(filepath, 'r') as f:
-                return json.load(f)
+                if filepath.endswith('.jsonl'):
+                    data = []
+                    for line in f:
+                        line = line.strip()
+                        if line:
+                            data.append(json.loads(line))
+                    return data
+                else:
+                    return json.load(f)
         except Exception as e:
             logger.error(f"Error reading {filepath}: {e}")
             return []
@@ -81,11 +111,13 @@ class DataReader:
 data_reader = DataReader()
 
 @app.route('/')
+@requires_auth
 def index():
     """Main dashboard page"""
     return render_template('index.html')
 
 @app.route('/api/current')
+@requires_auth
 def get_current_data():
     """Get current temperature readings"""
     latest = data_reader.get_latest_reading()
@@ -95,6 +127,7 @@ def get_current_data():
         return jsonify({"error": "No data available"}), 404
 
 @app.route('/api/data/<period>')
+@requires_auth
 def get_historical_data(period):
     """Get historical temperature data"""
     period_hours = {
@@ -116,6 +149,7 @@ def get_historical_data(period):
     })
 
 @app.route('/api/summary/<period>')
+@requires_auth
 def get_summary_data(period):
     """Get summary statistics for a period"""
     period_hours = {
@@ -163,8 +197,15 @@ def get_summary_data(period):
 if __name__ == '__main__':
     os.makedirs('templates', exist_ok=True)
     
+    debug_mode = config.WEB_DEBUG
+    if debug_mode:
+        logger.warning("DEBUG MODE ENABLED - This should not be used in production!")
+    
+    logger.info(f"Starting web server on {config.WEB_HOST}:{config.WEB_PORT}")
+    logger.info(f"Authentication enabled - Username: {config.WEB_USERNAME}")
+    
     app.run(
         host=config.WEB_HOST,
         port=config.WEB_PORT,
-        debug=True
+        debug=debug_mode
     )
