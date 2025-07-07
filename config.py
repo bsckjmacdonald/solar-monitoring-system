@@ -16,6 +16,10 @@ class Config:
     WEB_HOST = "0.0.0.0"
     WEB_PORT = 8080
     
+    WEB_DEBUG = os.getenv('WEB_DEBUG', 'False').lower() == 'true'
+    WEB_USERNAME = os.getenv('WEB_USERNAME', 'admin')
+    WEB_PASSWORD = os.getenv('WEB_PASSWORD', 'solar123')  # Default password - should be changed
+    
     RETENTION_24H = 24
     RETENTION_48H = 48
     RETENTION_1W = 168  # 7 days * 24 hours

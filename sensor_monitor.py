@@ -161,9 +161,14 @@ class SolarMonitor:
     def _create_new_log_file(self):
         """Create a new hourly log file"""
         timestamp = datetime.now().strftime("%Y%m%d_%H")
-        filename = f"{self.config.LOG_FILE_PREFIX}_{timestamp}.json"
+        filename = f"{self.config.LOG_FILE_PREFIX}_{timestamp}.jsonl"  # .jsonl for line-delimited JSON
         self.current_log_file = os.path.join(self.config.DATA_DIR, filename)
         self.current_log_data = []
+        
+        if not os.path.exists(self.current_log_file):
+            with open(self.current_log_file, 'w') as f:
+                pass  # Create empty file
+        
         logger.info(f"Created new log file: {self.current_log_file}")
     
     def read_sensors(self) -> Dict:
@@ -181,12 +186,12 @@ class SolarMonitor:
         return readings
     
     def log_reading(self, reading: Dict):
-        """Log a temperature reading"""
+        """Log a temperature reading using append-only method to reduce SD card wear"""
         self.current_log_data.append(reading)
         
         try:
-            with open(self.current_log_file, 'w') as f:
-                json.dump(self.current_log_data, f, indent=2)
+            with open(self.current_log_file, 'a') as f:
+                f.write(json.dumps(reading) + '\n')
         except Exception as e:
             logger.error(f"Error writing to log file: {e}")
     
@@ -210,13 +215,13 @@ class SolarMonitor:
         """Remove data files older than 90 days to save SD card space"""
         try:
             cutoff_date = datetime.now() - timedelta(days=90)
-            data_files = glob.glob(os.path.join(self.config.DATA_DIR, f"{self.config.LOG_FILE_PREFIX}_*.json"))
+            data_files = glob.glob(os.path.join(self.config.DATA_DIR, f"{self.config.LOG_FILE_PREFIX}_*.json*"))  # Match both .json and .jsonl
             
             deleted_count = 0
             for file_path in data_files:
                 try:
                     filename = os.path.basename(file_path)
-                    date_part = filename.replace(f"{self.config.LOG_FILE_PREFIX}_", "").replace(".json", "")
+                    date_part = filename.replace(f"{self.config.LOG_FILE_PREFIX}_", "").replace(".json", "").replace(".jsonl", "")
                     
                     if len(date_part) >= 11:
                         date_str = date_part[:8]
