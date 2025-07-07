@@ -1,0 +1,17 @@
+[Unit]
+Description=Solar Water Heater Monitor
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+User=pi
+Group=pi
+WorkingDirectory=/home/pi/solar-monitor
+Environment=PATH=/home/pi/solar-monitor/solar-monitor-env/bin
+ExecStart=/home/pi/solar-monitor/solar-monitor-env/bin/python /home/pi/solar-monitor/run_monitor.py
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
