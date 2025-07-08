@@ -1,7 +1,12 @@
-flask==2.3.3
-google-api-python-client==2.108.0
-google-auth-httplib2==0.1.1
-google-auth-oauthlib==1.1.0
+Flask==2.3.3
 w1thermsensor==2.0.0
-schedule==1.2.0
 python-dotenv==1.0.0
+
+# Optional: Google Drive API (legacy method)
+# google-api-python-client==2.108.0
+# google-auth-httplib2==0.1.1
+# google-auth-oauthlib==1.1.0
+
+# Note: rclone is the recommended method for Google Drive uploads
+# Install rclone with: sudo apt install rclone
+# Configure with: python setup_rclone.py

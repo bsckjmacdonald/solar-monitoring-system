@@ -13,6 +13,9 @@ class Config:
     GOOGLE_DRIVE_FOLDER_ID = os.getenv('GOOGLE_DRIVE_FOLDER_ID')
     GOOGLE_CREDENTIALS_FILE = os.getenv('GOOGLE_CREDENTIALS_FILE', 'credentials.json')
     
+    RCLONE_REMOTE = os.getenv('RCLONE_REMOTE', 'gdrive')
+    RCLONE_FOLDER = os.getenv('RCLONE_FOLDER', 'solar-monitor-data')
+    
     WEB_HOST = "0.0.0.0"
     WEB_PORT = 8080
     
