@@ -61,47 +61,58 @@ def check_configuration():
         print(f"❌ Credentials file not found: {creds_file}")
 
 def test_google_drive_connection():
-    """Test Google Drive API connection"""
+    """Test Google Drive connection (both rclone and API)"""
     print("\n=== Google Drive Connection Test ===")
     
+    print("Testing rclone connection...")
+    try:
+        import subprocess
+        result = subprocess.run(["rclone", "version"], capture_output=True, text=True)
+        if result.returncode == 0:
+            print("✅ rclone is installed")
+            
+            result = subprocess.run(["rclone", "lsd", "gdrive:"], capture_output=True, text=True)
+            if result.returncode == 0:
+                print("✅ rclone Google Drive connection successful")
+                
+                result = subprocess.run(["rclone", "ls", "gdrive:solar-monitor-data/"], capture_output=True, text=True)
+                if result.returncode == 0:
+                    files = [line.strip().split(None, 1)[1] for line in result.stdout.strip().split('\n') if line.strip()]
+                    print(f"✅ Found {len(files)} files in solar-monitor-data folder")
+                    if files:
+                        print("   Recent files:")
+                        for file in files[-5:]:
+                            print(f"     - {file}")
+                else:
+                    print("⚠️  solar-monitor-data folder not found or empty")
+                    print("   Run: python setup_rclone.py to create it")
+            else:
+                print("❌ rclone Google Drive connection failed")
+                print(f"   Error: {result.stderr}")
+                print("   Run: rclone config to set up Google Drive")
+        else:
+            print("❌ rclone not found")
+            print("   Install with: sudo apt install rclone")
+    except FileNotFoundError:
+        print("❌ rclone not installed")
+        print("   Install with: sudo apt install rclone")
+    except Exception as e:
+        print(f"❌ Error testing rclone: {e}")
+    
+    print("\nTesting legacy Google Drive API...")
     try:
         from google_drive_uploader import GoogleDriveUploader
         
         uploader = GoogleDriveUploader()
+        files = uploader.list_files()
+        print(f"✅ rclone-based uploader working, found {len(files)} files")
         
-        if uploader.service:
-            print("✅ Google Drive service initialized successfully")
-            
-            try:
-                files = uploader.list_files()
-                print(f"✅ Successfully connected to Google Drive")
-                print(f"   Found {len(files)} files in the account")
-                
-                config = Config()
-                if config.GOOGLE_DRIVE_FOLDER_ID:
-                    folder_files = uploader.list_files(config.GOOGLE_DRIVE_FOLDER_ID)
-                    print(f"✅ Successfully accessed target folder")
-                    print(f"   Found {len(folder_files)} files in target folder")
-                    
-                    if len(folder_files) > 0:
-                        print("   Recent files in folder:")
-                        for file in folder_files[:5]:
-                            print(f"     - {file['name']} (created: {file.get('createdTime', 'unknown')})")
-                else:
-                    print("⚠️  No folder ID configured, files will go to root directory")
-                    
-            except Exception as e:
-                print(f"❌ Error accessing Google Drive: {e}")
-                
-        else:
-            print("❌ Failed to initialize Google Drive service")
-            print("   Check credentials and authentication")
-            
     except ImportError as e:
-        print(f"❌ Missing required libraries: {e}")
-        print("   Run: pip install google-api-python-client google-auth-httplib2 google-auth-oauthlib")
+        print(f"⚠️  Legacy API libraries not available: {e}")
+        print("   This is OK - using rclone instead")
     except Exception as e:
-        print(f"❌ Error testing Google Drive connection: {e}")
+        print(f"⚠️  Legacy API test failed: {e}")
+        print("   This is OK - using rclone instead")
 
 def check_data_files():
     """Check for data files that should be uploaded"""
