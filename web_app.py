@@ -47,14 +47,19 @@ class DataReader:
     
     def get_data_files(self) -> List[str]:
         """Get list of available data files"""
-        if not os.path.exists(self.config.DATA_DIR):
+        data_dir = os.path.abspath(self.config.DATA_DIR)
+        logger.info(f"Looking for data files in: {data_dir}")
+        
+        if not os.path.exists(data_dir):
+            logger.warning(f"Data directory does not exist: {data_dir}")
             return []
         
         files = []
-        for filename in os.listdir(self.config.DATA_DIR):
+        for filename in os.listdir(data_dir):
             if filename.startswith(self.config.LOG_FILE_PREFIX) and (filename.endswith('.json') or filename.endswith('.jsonl')):
-                files.append(os.path.join(self.config.DATA_DIR, filename))
+                files.append(os.path.join(data_dir, filename))
         
+        logger.info(f"Found {len(files)} data files")
         return sorted(files)
     
     def read_data_file(self, filepath: str) -> List[Dict]:
@@ -80,18 +85,26 @@ class DataReader:
         all_data = []
         
         files = self.get_data_files()
+        logger.info(f"Processing {len(files)} files for {hours}h period (cutoff: {cutoff_time})")
+        
         for filepath in files:
             data = self.read_data_file(filepath)
+            readings_added = 0
             for reading in data:
                 try:
                     timestamp = datetime.fromisoformat(reading['timestamp'])
                     if timestamp >= cutoff_time:
                         all_data.append(reading)
+                        readings_added += 1
                 except Exception as e:
-                    logger.error(f"Error parsing timestamp: {e}")
+                    logger.error(f"Error parsing timestamp in {filepath}: {e}")
                     continue
+            
+            if readings_added > 0:
+                logger.debug(f"Added {readings_added} readings from {os.path.basename(filepath)}")
         
         all_data.sort(key=lambda x: x['timestamp'])
+        logger.info(f"Returning {len(all_data)} total readings for {hours}h period")
         return all_data
     
     def get_latest_reading(self) -> Optional[Dict]:
