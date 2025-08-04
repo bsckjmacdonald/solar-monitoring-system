@@ -7,7 +7,7 @@ class Config:
     SENSOR_READ_INTERVAL = 5  # seconds
     SENSORS_COUNT = 4
     
-    DATA_DIR = "data"
+    DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
     LOG_FILE_PREFIX = "temp_log"
     
     GOOGLE_DRIVE_FOLDER_ID = os.getenv('GOOGLE_DRIVE_FOLDER_ID')
