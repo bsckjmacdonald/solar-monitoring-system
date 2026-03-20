@@ -5,6 +5,7 @@ Web interface for solar water heater monitoring system
 
 import os
 import json
+import csv as csv_module
 import logging
 from datetime import datetime, timedelta
 from typing import List, Dict, Optional
@@ -206,6 +207,86 @@ def get_summary_data(period):
         "summary": summary,
         "data_points": len(data)
     })
+
+@app.route('/spectrogram')
+@requires_auth
+def spectrogram_page():
+    """Acoustic spectrogram viewer page"""
+    return render_template('spectrogram.html')
+
+
+@app.route('/api/acoustic/files')
+@requires_auth
+def list_acoustic_files():
+    """List available acoustic CSV files"""
+    acoustic_dir = os.path.join(os.path.abspath(config.DATA_DIR), 'acoustic')
+    os.makedirs(acoustic_dir, exist_ok=True)
+    files = []
+    for fname in sorted(os.listdir(acoustic_dir)):
+        if fname.endswith('.csv'):
+            fpath = os.path.join(acoustic_dir, fname)
+            files.append({'name': fname, 'size': os.path.getsize(fpath)})
+    return jsonify({'files': files})
+
+
+@app.route('/api/acoustic/data/<path:filename>')
+@requires_auth
+def get_acoustic_data(filename):
+    """Return raw samples from an acoustic CSV file"""
+    # Prevent path traversal
+    if '..' in filename or filename.startswith('/'):
+        return jsonify({'error': 'Invalid filename'}), 400
+
+    acoustic_dir = os.path.join(os.path.abspath(config.DATA_DIR), 'acoustic')
+    filepath = os.path.join(acoustic_dir, filename)
+
+    if not os.path.exists(filepath):
+        return jsonify({'error': 'File not found'}), 404
+
+    samples = []
+    sample_rate = None
+
+    try:
+        with open(filepath, 'r') as f:
+            header_checked = False
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                # Metadata comments: # sample_rate=8000 or # fs=8000
+                if line.startswith('#'):
+                    m = next(
+                        (p for p in line[1:].split() if '=' in p and
+                         p.split('=')[0].strip().lower() in ('sample_rate', 'fs', 'samplerate')),
+                        None)
+                    if m:
+                        try:
+                            sample_rate = int(m.split('=')[1])
+                        except ValueError:
+                            pass
+                    continue
+                cols = line.split(',')
+                # Skip header row (non-numeric last column)
+                if not header_checked:
+                    header_checked = True
+                    try:
+                        float(cols[-1])
+                    except ValueError:
+                        continue
+                try:
+                    samples.append(float(cols[-1]))
+                except (ValueError, IndexError):
+                    pass
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+    return jsonify({
+        'filename': filename,
+        'samples': samples,
+        'num_samples': len(samples),
+        'sample_rate': sample_rate,
+    })
+
 
 if __name__ == '__main__':
     os.makedirs('templates', exist_ok=True)
