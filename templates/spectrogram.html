@@ -1,0 +1,996 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Acoustic Spectrogram Viewer</title>
+    <style>
+        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+        body {
+            font-family: 'Segoe UI', Arial, sans-serif;
+            background: #0f0f1a;
+            color: #d0d0e0;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        /* ── Nav ── */
+        nav {
+            background: #1a1a2e;
+            border-bottom: 1px solid #2a2a4a;
+            padding: 10px 20px;
+            display: flex;
+            align-items: center;
+            gap: 20px;
+            flex-shrink: 0;
+        }
+        nav a {
+            color: #7090d0;
+            text-decoration: none;
+            font-size: 14px;
+        }
+        nav a:hover { color: #90b0ff; }
+        nav h1 {
+            font-size: 18px;
+            font-weight: 600;
+            color: #e0e8ff;
+            flex: 1;
+        }
+
+        /* ── Layout ── */
+        .app-body {
+            display: flex;
+            flex: 1;
+            overflow: hidden;
+        }
+
+        /* ── Sidebar ── */
+        .sidebar {
+            width: 260px;
+            min-width: 260px;
+            background: #13132a;
+            border-right: 1px solid #2a2a4a;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            gap: 0;
+        }
+        .sidebar-section {
+            border-bottom: 1px solid #2a2a4a;
+            padding: 14px;
+        }
+        .sidebar-section h3 {
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: .08em;
+            color: #7080a0;
+            margin-bottom: 10px;
+        }
+
+        /* File list */
+        #server-file-list {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+            max-height: 200px;
+            overflow-y: auto;
+        }
+        .file-item {
+            padding: 7px 10px;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 13px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            transition: background .15s;
+            border: 1px solid transparent;
+        }
+        .file-item:hover { background: #1e2245; }
+        .file-item.selected { background: #1e3070; border-color: #3060c0; }
+        .file-item .fname { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+        .file-item .fsize { font-size: 11px; color: #6080a0; flex-shrink: 0; margin-left: 6px; }
+        .no-files { font-size: 12px; color: #506080; font-style: italic; }
+
+        /* Drop zone */
+        #drop-zone {
+            border: 2px dashed #3a4a6a;
+            border-radius: 8px;
+            padding: 16px;
+            text-align: center;
+            cursor: pointer;
+            font-size: 12px;
+            color: #7090b0;
+            transition: all .2s;
+        }
+        #drop-zone:hover, #drop-zone.drag-over {
+            border-color: #5080d0;
+            background: #1a2545;
+            color: #90b0f0;
+        }
+        #drop-zone .icon { font-size: 22px; margin-bottom: 6px; }
+        #file-input { display: none; }
+
+        /* Settings */
+        .setting-row {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+            margin-bottom: 10px;
+        }
+        .setting-row label {
+            font-size: 11px;
+            color: #8090b0;
+        }
+        .setting-row select,
+        .setting-row input[type="number"],
+        .setting-row input[type="range"] {
+            background: #1a1a35;
+            border: 1px solid #3a4a6a;
+            border-radius: 4px;
+            color: #d0d8f0;
+            padding: 5px 8px;
+            font-size: 12px;
+            width: 100%;
+        }
+        .setting-row input[type="range"] {
+            padding: 0;
+            cursor: pointer;
+            accent-color: #4070d0;
+        }
+        .range-row {
+            display: flex;
+            justify-content: space-between;
+            font-size: 11px;
+            color: #6080a0;
+        }
+        .btn-generate {
+            width: 100%;
+            padding: 9px;
+            background: #2050b0;
+            border: none;
+            border-radius: 6px;
+            color: #fff;
+            font-size: 13px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background .15s;
+            margin-top: 4px;
+        }
+        .btn-generate:hover { background: #2a60d0; }
+        .btn-generate:disabled { background: #333355; color: #666680; cursor: not-allowed; }
+
+        /* ── Main area ── */
+        main {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            padding: 12px 16px;
+            gap: 10px;
+        }
+
+        /* File info bar */
+        #file-info {
+            background: #1a1a30;
+            border: 1px solid #2a2a4a;
+            border-radius: 6px;
+            padding: 8px 14px;
+            font-size: 12px;
+            color: #8090b0;
+            display: flex;
+            gap: 20px;
+            align-items: center;
+            flex-shrink: 0;
+        }
+        #file-info .fi-name { color: #c0d0f0; font-weight: 600; }
+        #file-info .fi-meta { color: #7080a0; }
+
+        /* Viz area */
+        #viz-area {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            overflow: hidden;
+            min-height: 0;
+        }
+
+        /* Waveform */
+        #waveform-section {
+            flex-shrink: 0;
+            background: #13132a;
+            border: 1px solid #2a2a4a;
+            border-radius: 6px;
+            padding: 6px 8px 4px;
+        }
+        #waveform-section .section-title {
+            font-size: 10px;
+            text-transform: uppercase;
+            letter-spacing: .06em;
+            color: #5060a0;
+            margin-bottom: 4px;
+        }
+        #waveform-canvas {
+            width: 100%;
+            height: 60px;
+            display: block;
+            border-radius: 3px;
+        }
+
+        /* Spectrogram */
+        #spectrogram-section {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            background: #13132a;
+            border: 1px solid #2a2a4a;
+            border-radius: 6px;
+            padding: 6px 8px 4px;
+            min-height: 0;
+        }
+        #spectrogram-section .section-title {
+            font-size: 10px;
+            text-transform: uppercase;
+            letter-spacing: .06em;
+            color: #5060a0;
+            margin-bottom: 4px;
+        }
+        #spectrogram-layout {
+            flex: 1;
+            display: flex;
+            gap: 6px;
+            min-height: 0;
+        }
+        #freq-axis {
+            width: 46px;
+            flex-shrink: 0;
+            position: relative;
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+            align-items: flex-end;
+            font-size: 10px;
+            color: #6070a0;
+            padding-bottom: 18px; /* align with time axis */
+        }
+        #freq-axis span { line-height: 1; }
+        #spectrogram-wrapper {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            min-width: 0;
+            min-height: 0;
+        }
+        #canvas-container {
+            flex: 1;
+            position: relative;
+            overflow: hidden;
+            cursor: crosshair;
+            border-radius: 3px;
+            min-height: 0;
+        }
+        #spectrogram-canvas {
+            width: 100%;
+            height: 100%;
+            display: block;
+            image-rendering: pixelated;
+        }
+        #cursor-line {
+            position: absolute;
+            top: 0;
+            bottom: 0;
+            width: 1px;
+            background: rgba(255,255,255,0.5);
+            pointer-events: none;
+            display: none;
+        }
+        #freq-line {
+            position: absolute;
+            left: 0;
+            right: 0;
+            height: 1px;
+            background: rgba(255,255,255,0.3);
+            pointer-events: none;
+            display: none;
+        }
+        #time-axis {
+            height: 18px;
+            font-size: 10px;
+            color: #6070a0;
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-end;
+            padding: 0 2px;
+            flex-shrink: 0;
+        }
+        #colorscale-wrapper {
+            width: 18px;
+            flex-shrink: 0;
+            display: flex;
+            flex-direction: column;
+            gap: 3px;
+            padding-bottom: 18px;
+        }
+        #colorscale-label-max { font-size: 9px; color: #6070a0; text-align: center; }
+        #colorscale-canvas {
+            flex: 1;
+            width: 14px;
+            border-radius: 3px;
+            align-self: center;
+        }
+        #colorscale-label-min { font-size: 9px; color: #6070a0; text-align: center; }
+
+        /* Status / cursor readout */
+        #status-bar {
+            background: #13132a;
+            border: 1px solid #2a2a4a;
+            border-radius: 5px;
+            padding: 5px 12px;
+            font-size: 12px;
+            color: #7080a0;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-shrink: 0;
+        }
+        #cursor-readout { color: #90b0e0; }
+        #progress-bar {
+            display: none;
+            flex: 1;
+            height: 4px;
+            background: #2a2a4a;
+            border-radius: 2px;
+            overflow: hidden;
+            margin: 0 12px;
+        }
+        #progress-fill {
+            height: 100%;
+            background: #4070d0;
+            width: 0%;
+            transition: width .1s;
+        }
+
+        /* Scrollbar styling */
+        ::-webkit-scrollbar { width: 6px; }
+        ::-webkit-scrollbar-track { background: #10101e; }
+        ::-webkit-scrollbar-thumb { background: #3a3a5a; border-radius: 3px; }
+
+        .empty-state {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            color: #404060;
+            gap: 10px;
+        }
+        .empty-state .big-icon { font-size: 48px; }
+        .empty-state p { font-size: 14px; }
+    </style>
+</head>
+<body>
+
+<nav>
+    <a href="/">&#8592; Solar Monitor</a>
+    <h1>Acoustic Spectrogram Viewer</h1>
+</nav>
+
+<div class="app-body">
+
+    <!-- ── Sidebar ── -->
+    <aside class="sidebar">
+
+        <div class="sidebar-section">
+            <h3>Server Files</h3>
+            <div id="server-file-list"><span class="no-files">Loading&hellip;</span></div>
+        </div>
+
+        <div class="sidebar-section">
+            <h3>Local File</h3>
+            <div id="drop-zone" role="button" tabindex="0"
+                 onclick="document.getElementById('file-input').click()"
+                 ondragover="handleDragOver(event)"
+                 ondragleave="handleDragLeave(event)"
+                 ondrop="handleDrop(event)">
+                <div class="icon">&#128190;</div>
+                <div>Drop CSV here<br>or click to browse</div>
+            </div>
+            <input type="file" id="file-input" accept=".csv" onchange="handleFileInput(event)">
+        </div>
+
+        <div class="sidebar-section">
+            <h3>Settings</h3>
+
+            <div class="setting-row">
+                <label>Sample Rate override (Hz) &mdash; leave blank to auto-detect</label>
+                <input type="number" id="sample-rate" placeholder="e.g. 44100" min="100" max="192000">
+            </div>
+
+            <div class="setting-row">
+                <label>FFT Size</label>
+                <select id="fft-size">
+                    <option value="256">256</option>
+                    <option value="512">512</option>
+                    <option value="1024" selected>1024</option>
+                    <option value="2048">2048</option>
+                    <option value="4096">4096</option>
+                </select>
+            </div>
+
+            <div class="setting-row">
+                <label>Overlap: <span id="overlap-val">75</span>%</label>
+                <input type="range" id="overlap" min="0" max="90" step="5" value="75"
+                       oninput="document.getElementById('overlap-val').textContent=this.value">
+            </div>
+
+            <div class="setting-row">
+                <label>Colormap</label>
+                <select id="colormap">
+                    <option value="inferno" selected>Inferno</option>
+                    <option value="viridis">Viridis</option>
+                    <option value="magma">Magma</option>
+                    <option value="hot">Hot</option>
+                    <option value="cool">Cool</option>
+                </select>
+            </div>
+
+            <div class="setting-row">
+                <label>dB floor</label>
+                <input type="number" id="db-min" value="-80" step="10">
+            </div>
+            <div class="setting-row">
+                <label>dB ceiling</label>
+                <input type="number" id="db-max" value="0" step="10">
+            </div>
+
+            <button class="btn-generate" id="btn-generate" onclick="generate()" disabled>
+                Generate Spectrogram
+            </button>
+        </div>
+
+    </aside>
+
+    <!-- ── Main ── -->
+    <main>
+
+        <div id="file-info">
+            <span class="fi-name" id="fi-name">No file loaded</span>
+            <span class="fi-meta" id="fi-meta"></span>
+        </div>
+
+        <div id="viz-area">
+            <div class="empty-state" id="empty-state">
+                <div class="big-icon">&#127925;</div>
+                <p>Select a CSV file from the sidebar to get started</p>
+            </div>
+
+            <div id="waveform-section" style="display:none">
+                <div class="section-title">Waveform</div>
+                <canvas id="waveform-canvas" height="60"></canvas>
+            </div>
+
+            <div id="spectrogram-section" style="display:none">
+                <div class="section-title">Spectrogram</div>
+                <div id="spectrogram-layout">
+                    <div id="freq-axis"></div>
+                    <div id="spectrogram-wrapper">
+                        <div id="canvas-container"
+                             onmousemove="handleMouseMove(event)"
+                             onmouseleave="handleMouseLeave()">
+                            <canvas id="spectrogram-canvas"></canvas>
+                            <div id="cursor-line"></div>
+                            <div id="freq-line"></div>
+                        </div>
+                        <div id="time-axis"></div>
+                    </div>
+                    <div id="colorscale-wrapper">
+                        <div id="colorscale-label-max"></div>
+                        <canvas id="colorscale-canvas" width="14"></canvas>
+                        <div id="colorscale-label-min"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div id="status-bar">
+            <span id="status-msg">Ready &mdash; select a file to begin</span>
+            <div id="progress-bar"><div id="progress-fill"></div></div>
+            <span id="cursor-readout"></span>
+        </div>
+
+    </main>
+</div>
+
+<script>
+'use strict';
+
+// ── State ──────────────────────────────────────────────────────────────────
+let loadedSamples = null;
+let loadedSampleRate = null;
+let loadedFilename = null;
+let spectrogramFrames = null;  // Float32Array[]
+let spectrogramMeta = null;    // { numFrames, numBins, hopSize, sampleRate, dbMin, dbMax }
+
+// ── Colormaps ──────────────────────────────────────────────────────────────
+const COLORMAP_STOPS = {
+    inferno: [
+        [0,     [  0,   0,   4]],
+        [0.13,  [ 22,  11,  57]],
+        [0.25,  [ 66,  10, 104]],
+        [0.38,  [117,  15, 109]],
+        [0.50,  [163,  37,  83]],
+        [0.63,  [200,  70,  54]],
+        [0.75,  [227, 113,  28]],
+        [0.88,  [245, 163,   6]],
+        [1.00,  [252, 255, 164]],
+    ],
+    viridis: [
+        [0,     [ 68,   1,  84]],
+        [0.13,  [ 71,  44, 122]],
+        [0.25,  [ 59,  82, 139]],
+        [0.38,  [ 44, 114, 142]],
+        [0.50,  [ 33, 145, 140]],
+        [0.63,  [ 39, 174, 128]],
+        [0.75,  [ 92, 200, 100]],
+        [0.88,  [170, 220,  50]],
+        [1.00,  [253, 231,  37]],
+    ],
+    magma: [
+        [0,     [  0,   0,   4]],
+        [0.13,  [ 18,  13,  53]],
+        [0.25,  [ 58,  15,  97]],
+        [0.38,  [106,  14, 120]],
+        [0.50,  [152,  30, 118]],
+        [0.63,  [198,  60,  97]],
+        [0.75,  [229, 107,  94]],
+        [0.88,  [247, 163, 141]],
+        [1.00,  [252, 253, 191]],
+    ],
+    hot: [
+        [0,     [  0,   0,   0]],
+        [0.33,  [200,   0,   0]],
+        [0.66,  [255, 180,   0]],
+        [1.00,  [255, 255, 255]],
+    ],
+    cool: [
+        [0,     [  0, 255, 255]],
+        [0.33,  [  0, 128, 255]],
+        [0.66,  [ 80,  30, 220]],
+        [1.00,  [150,   0, 180]],
+    ],
+};
+
+function lerp(a, b, t) { return a + (b - a) * t; }
+
+function getColor(t, cmapName) {
+    t = Math.max(0, Math.min(1, t));
+    const stops = COLORMAP_STOPS[cmapName] || COLORMAP_STOPS.inferno;
+    for (let i = 1; i < stops.length; i++) {
+        if (t <= stops[i][0]) {
+            const lo = stops[i - 1], hi = stops[i];
+            const f = (t - lo[0]) / (hi[0] - lo[0]);
+            return [
+                Math.round(lerp(lo[1][0], hi[1][0], f)),
+                Math.round(lerp(lo[1][1], hi[1][1], f)),
+                Math.round(lerp(lo[1][2], hi[1][2], f)),
+            ];
+        }
+    }
+    return stops[stops.length - 1][1];
+}
+
+// ── FFT (Cooley-Tukey, in-place) ───────────────────────────────────────────
+function fft(re, im) {
+    const N = re.length;
+    // Bit-reversal permutation
+    let j = 0;
+    for (let i = 1; i < N; i++) {
+        let bit = N >> 1;
+        for (; j & bit; bit >>= 1) j ^= bit;
+        j ^= bit;
+        if (i < j) {
+            let t = re[i]; re[i] = re[j]; re[j] = t;
+            t = im[i]; im[i] = im[j]; im[j] = t;
+        }
+    }
+    // Butterfly passes
+    for (let len = 2; len <= N; len <<= 1) {
+        const half = len >> 1;
+        const ang = -Math.PI / half;
+        const wdr = Math.cos(ang), wdi = Math.sin(ang);
+        for (let i = 0; i < N; i += len) {
+            let wr = 1, wi = 0;
+            for (let k = 0; k < half; k++) {
+                const ur = re[i + k], ui = im[i + k];
+                const vr = re[i + k + half] * wr - im[i + k + half] * wi;
+                const vi = re[i + k + half] * wi + im[i + k + half] * wr;
+                re[i + k] = ur + vr;   im[i + k] = ui + vi;
+                re[i + k + half] = ur - vr; im[i + k + half] = ui - vi;
+                const nwr = wr * wdr - wi * wdi;
+                wi = wr * wdi + wi * wdr;
+                wr = nwr;
+            }
+        }
+    }
+}
+
+function hannWindow(N) {
+    const w = new Float32Array(N);
+    for (let i = 0; i < N; i++)
+        w[i] = 0.5 * (1 - Math.cos(2 * Math.PI * i / (N - 1)));
+    return w;
+}
+
+// ── CSV Parsing ────────────────────────────────────────────────────────────
+function parseCSVText(text) {
+    const lines = text.split('\n');
+    const samples = [];
+    let detectedSR = null;
+    let headerChecked = false;
+
+    for (const raw of lines) {
+        const line = raw.trim();
+        if (!line) continue;
+
+        if (line.startsWith('#')) {
+            const srMatch = line.match(/(?:sample_rate|samplerate|fs)\s*[=:]\s*(\d+)/i);
+            if (srMatch) detectedSR = parseInt(srMatch[1]);
+            continue;
+        }
+
+        const cols = line.split(',');
+        const last = cols[cols.length - 1].trim();
+
+        if (!headerChecked) {
+            headerChecked = true;
+            if (isNaN(parseFloat(last))) continue; // skip header row
+        }
+
+        const v = parseFloat(last);
+        if (!isNaN(v)) samples.push(v);
+    }
+
+    return { samples, detectedSR };
+}
+
+// ── STFT Computation ───────────────────────────────────────────────────────
+function computeSTFT(samples, fftSize, hopSize) {
+    const win = hannWindow(fftSize);
+    const numBins = fftSize >> 1;
+    const frames = [];
+    const re = new Float32Array(fftSize);
+    const im = new Float32Array(fftSize);
+
+    for (let start = 0; start + fftSize <= samples.length; start += hopSize) {
+        re.fill(0); im.fill(0);
+        for (let i = 0; i < fftSize; i++)
+            re[i] = samples[start + i] * win[i];
+
+        fft(re, im);
+
+        const mag = new Float32Array(numBins);
+        for (let i = 0; i < numBins; i++)
+            mag[i] = Math.sqrt(re[i] * re[i] + im[i] * im[i]);
+        frames.push(mag);
+    }
+
+    return frames;
+}
+
+// ── Rendering ──────────────────────────────────────────────────────────────
+function drawWaveform(samples) {
+    const canvas = document.getElementById('waveform-canvas');
+    const W = canvas.offsetWidth || 800;
+    canvas.width = W;
+    const H = 60;
+    canvas.height = H;
+    const ctx = canvas.getContext('2d');
+
+    ctx.fillStyle = '#0c0c1e';
+    ctx.fillRect(0, 0, W, H);
+
+    // Downsample for display
+    const step = Math.max(1, Math.floor(samples.length / W));
+    const midY = H / 2;
+    let maxAmp = 0;
+    for (let i = 0; i < samples.length; i++)
+        if (Math.abs(samples[i]) > maxAmp) maxAmp = Math.abs(samples[i]);
+    if (maxAmp === 0) maxAmp = 1;
+    const scale = (H / 2 - 2) / maxAmp;
+
+    ctx.strokeStyle = '#4080d0';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    for (let x = 0; x < W; x++) {
+        const si = x * step;
+        const v = samples[Math.min(si, samples.length - 1)] * scale;
+        if (x === 0) ctx.moveTo(x, midY - v);
+        else ctx.lineTo(x, midY - v);
+    }
+    ctx.stroke();
+
+    // Zero line
+    ctx.strokeStyle = 'rgba(255,255,255,0.1)';
+    ctx.beginPath();
+    ctx.moveTo(0, midY); ctx.lineTo(W, midY);
+    ctx.stroke();
+}
+
+function drawSpectrogram(frames, numBins, dbMin, dbMax, cmapName) {
+    const canvas = document.getElementById('spectrogram-canvas');
+    const numFrames = frames.length;
+    canvas.width = numFrames;
+    canvas.height = numBins;
+
+    const ctx = canvas.getContext('2d');
+    const imgData = ctx.createImageData(numFrames, numBins);
+    const d = imgData.data;
+
+    for (let t = 0; t < numFrames; t++) {
+        for (let f = 0; f < numBins; f++) {
+            const mag = frames[t][f];
+            const db = mag > 1e-10 ? 20 * Math.log10(mag) : -120;
+            const norm = Math.max(0, Math.min(1, (db - dbMin) / (dbMax - dbMin)));
+            const [r, g, b] = getColor(norm, cmapName);
+            const row = numBins - 1 - f; // low freq at bottom
+            const idx = (row * numFrames + t) * 4;
+            d[idx] = r; d[idx + 1] = g; d[idx + 2] = b; d[idx + 3] = 255;
+        }
+    }
+
+    ctx.putImageData(imgData, 0, 0);
+}
+
+function drawColorscale(dbMin, dbMax, cmapName) {
+    const canvas = document.getElementById('colorscale-canvas');
+    const H = canvas.offsetHeight || 200;
+    canvas.height = H;
+    const ctx = canvas.getContext('2d');
+    const imgData = ctx.createImageData(14, H);
+    for (let y = 0; y < H; y++) {
+        const t = 1 - y / (H - 1);
+        const [r, g, b] = getColor(t, cmapName);
+        const idx = y * 14 * 4;
+        for (let x = 0; x < 14; x++) {
+            imgData.data[idx + x*4]     = r;
+            imgData.data[idx + x*4 + 1] = g;
+            imgData.data[idx + x*4 + 2] = b;
+            imgData.data[idx + x*4 + 3] = 255;
+        }
+    }
+    ctx.putImageData(imgData, 0, 0);
+    document.getElementById('colorscale-label-max').textContent = dbMax + ' dB';
+    document.getElementById('colorscale-label-min').textContent = dbMin + ' dB';
+}
+
+function buildFreqAxis(sampleRate, numBins) {
+    const nyquist = sampleRate / 2;
+    const el = document.getElementById('freq-axis');
+    el.innerHTML = '';
+    const ticks = [1, 0.75, 0.5, 0.25, 0];
+    for (const t of ticks) {
+        const hz = Math.round(t * nyquist);
+        const span = document.createElement('span');
+        span.textContent = hz >= 1000 ? (hz / 1000).toFixed(1) + 'k' : hz + '';
+        el.appendChild(span);
+    }
+}
+
+function buildTimeAxis(numFrames, hopSize, sampleRate) {
+    const totalTime = (numFrames * hopSize) / sampleRate;
+    const el = document.getElementById('time-axis');
+    el.innerHTML = '';
+    const steps = 6;
+    for (let i = 0; i <= steps; i++) {
+        const t = (i / steps) * totalTime;
+        const span = document.createElement('span');
+        span.textContent = t.toFixed(2) + 's';
+        el.appendChild(span);
+    }
+}
+
+// ── Mouse interaction ──────────────────────────────────────────────────────
+function handleMouseMove(evt) {
+    if (!spectrogramMeta) return;
+    const container = document.getElementById('canvas-container');
+    const rect = container.getBoundingClientRect();
+    const px = evt.clientX - rect.left;
+    const py = evt.clientY - rect.top;
+    const xFrac = Math.max(0, Math.min(1, px / rect.width));
+    const yFrac = Math.max(0, Math.min(1, py / rect.height));
+
+    const { numFrames, hopSize, sampleRate, numBins, dbMin, dbMax } = spectrogramMeta;
+    const timeS = xFrac * (numFrames * hopSize / sampleRate);
+    const freqHz = (1 - yFrac) * (sampleRate / 2);
+
+    // Lookup dB value
+    const frameIdx = Math.floor(xFrac * (numFrames - 1));
+    const binIdx = Math.floor((1 - yFrac) * (numBins - 1));
+    const mag = spectrogramFrames[frameIdx]?.[binIdx] ?? 0;
+    const db = mag > 1e-10 ? 20 * Math.log10(mag) : -120;
+
+    document.getElementById('cursor-readout').textContent =
+        `t = ${timeS.toFixed(3)} s   |   f = ${freqHz < 1000 ? freqHz.toFixed(1) + ' Hz' : (freqHz/1000).toFixed(2) + ' kHz'}   |   ${db.toFixed(1)} dB`;
+
+    // Cursor lines
+    const cl = document.getElementById('cursor-line');
+    cl.style.display = 'block';
+    cl.style.left = px + 'px';
+    const fl = document.getElementById('freq-line');
+    fl.style.display = 'block';
+    fl.style.top = py + 'px';
+}
+
+function handleMouseLeave() {
+    document.getElementById('cursor-line').style.display = 'none';
+    document.getElementById('freq-line').style.display = 'none';
+    document.getElementById('cursor-readout').textContent = '';
+}
+
+// ── File loading helpers ───────────────────────────────────────────────────
+function setStatus(msg) {
+    document.getElementById('status-msg').textContent = msg;
+}
+
+function setProgress(pct) {
+    const bar = document.getElementById('progress-bar');
+    const fill = document.getElementById('progress-fill');
+    if (pct === null) { bar.style.display = 'none'; return; }
+    bar.style.display = 'block';
+    fill.style.width = pct + '%';
+}
+
+function onSamplesLoaded(samples, sr, filename) {
+    loadedSamples = new Float32Array(samples);
+    loadedSampleRate = sr;
+    loadedFilename = filename;
+
+    document.getElementById('empty-state').style.display = 'none';
+    document.getElementById('waveform-section').style.display = 'block';
+    document.getElementById('spectrogram-section').style.display = 'none';
+
+    document.getElementById('fi-name').textContent = filename;
+    const dur = sr ? (samples.length / sr).toFixed(2) + ' s' : 'unknown duration';
+    const srStr = sr ? sr.toLocaleString() + ' Hz' : 'SR unknown';
+    document.getElementById('fi-meta').textContent =
+        `${samples.length.toLocaleString()} samples · ${srStr} · ${dur}`;
+
+    if (sr && !document.getElementById('sample-rate').value)
+        document.getElementById('sample-rate').placeholder = `detected: ${sr}`;
+
+    drawWaveform(loadedSamples);
+    document.getElementById('btn-generate').disabled = false;
+    setStatus(`Loaded "${filename}" — ${samples.length.toLocaleString()} samples. Click Generate to render spectrogram.`);
+    setProgress(null);
+}
+
+// ── Load from server ───────────────────────────────────────────────────────
+function loadServerFile(fname) {
+    setStatus(`Loading "${fname}"…`);
+    setProgress(30);
+    fetch(`/api/acoustic/data/${encodeURIComponent(fname)}`)
+        .then(r => r.json())
+        .then(data => {
+            if (data.error) { setStatus('Error: ' + data.error); setProgress(null); return; }
+            setProgress(80);
+            onSamplesLoaded(data.samples, data.sample_rate, data.filename);
+        })
+        .catch(err => { setStatus('Network error: ' + err); setProgress(null); });
+}
+
+// ── Load from local file ───────────────────────────────────────────────────
+function readLocalFile(file) {
+    setStatus(`Reading "${file.name}"…`);
+    setProgress(20);
+    const reader = new FileReader();
+    reader.onload = e => {
+        setProgress(60);
+        const { samples, detectedSR } = parseCSVText(e.target.result);
+        onSamplesLoaded(samples, detectedSR, file.name);
+    };
+    reader.onerror = () => { setStatus('Error reading file.'); setProgress(null); };
+    reader.readAsText(file);
+}
+
+function handleFileInput(evt) {
+    const file = evt.target.files[0];
+    if (file) readLocalFile(file);
+}
+
+function handleDragOver(evt) {
+    evt.preventDefault();
+    document.getElementById('drop-zone').classList.add('drag-over');
+}
+function handleDragLeave() {
+    document.getElementById('drop-zone').classList.remove('drag-over');
+}
+function handleDrop(evt) {
+    evt.preventDefault();
+    document.getElementById('drop-zone').classList.remove('drag-over');
+    const file = evt.dataTransfer.files[0];
+    if (file) readLocalFile(file);
+}
+
+// ── Generate spectrogram ───────────────────────────────────────────────────
+function generate() {
+    if (!loadedSamples) return;
+
+    const srOverride = parseInt(document.getElementById('sample-rate').value) || null;
+    const sr = srOverride || loadedSampleRate || 44100;
+    const fftSize = parseInt(document.getElementById('fft-size').value);
+    const overlapPct = parseInt(document.getElementById('overlap').value);
+    const hopSize = Math.round(fftSize * (1 - overlapPct / 100));
+    const cmapName = document.getElementById('colormap').value;
+    const dbMin = parseFloat(document.getElementById('db-min').value);
+    const dbMax = parseFloat(document.getElementById('db-max').value);
+    const numBins = fftSize >> 1;
+
+    setStatus('Computing STFT…');
+    setProgress(10);
+    document.getElementById('btn-generate').disabled = true;
+
+    // Defer to let the UI update
+    setTimeout(() => {
+        const frames = computeSTFT(loadedSamples, fftSize, hopSize);
+        setProgress(70);
+
+        spectrogramFrames = frames;
+        spectrogramMeta = { numFrames: frames.length, numBins, hopSize, sampleRate: sr, dbMin, dbMax };
+
+        drawSpectrogram(frames, numBins, dbMin, dbMax, cmapName);
+        setProgress(90);
+
+        drawColorscale(dbMin, dbMax, cmapName);
+        buildFreqAxis(sr, numBins);
+        buildTimeAxis(frames.length, hopSize, sr);
+
+        document.getElementById('spectrogram-section').style.display = 'flex';
+        document.getElementById('btn-generate').disabled = false;
+
+        const dur = (frames.length * hopSize / sr).toFixed(2);
+        setStatus(`Spectrogram: ${frames.length} frames × ${numBins} bins · ${dur} s · FFT ${fftSize} · overlap ${overlapPct}%`);
+        setProgress(null);
+    }, 30);
+}
+
+// ── Populate server file list on load ─────────────────────────────────────
+function formatBytes(n) {
+    if (n < 1024) return n + ' B';
+    if (n < 1048576) return (n / 1024).toFixed(1) + ' KB';
+    return (n / 1048576).toFixed(1) + ' MB';
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+    fetch('/api/acoustic/files')
+        .then(r => r.json())
+        .then(data => {
+            const el = document.getElementById('server-file-list');
+            if (!data.files || data.files.length === 0) {
+                el.innerHTML = '<span class="no-files">No CSV files in data/acoustic/</span>';
+                return;
+            }
+            el.innerHTML = '';
+            for (const f of data.files) {
+                const div = document.createElement('div');
+                div.className = 'file-item';
+                div.innerHTML = `<span class="fname" title="${f.name}">${f.name}</span><span class="fsize">${formatBytes(f.size)}</span>`;
+                div.addEventListener('click', () => {
+                    document.querySelectorAll('.file-item').forEach(x => x.classList.remove('selected'));
+                    div.classList.add('selected');
+                    loadServerFile(f.name);
+                });
+                el.appendChild(div);
+            }
+        })
+        .catch(() => {
+            document.getElementById('server-file-list').innerHTML =
+                '<span class="no-files">Could not reach server</span>';
+        });
+});
+</script>
+</body>
+</html>
