@@ -370,6 +370,36 @@
         }
         .empty-state .big-icon { font-size: 48px; }
         .empty-state p { font-size: 14px; }
+
+        /* ── Axis selector ── */
+        #axis-selector {
+            display: none;
+            align-items: center;
+            gap: 6px;
+            flex-shrink: 0;
+        }
+        #axis-selector .axis-label {
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: .07em;
+            color: #6070a0;
+            margin-right: 4px;
+        }
+        .axis-btn {
+            padding: 5px 16px;
+            border-radius: 5px;
+            border: 1px solid #3a4a6a;
+            background: #1a1a35;
+            color: #8090b0;
+            font-size: 13px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background .15s, color .15s, border-color .15s;
+        }
+        .axis-btn:hover { background: #1e2a50; color: #c0d0f0; }
+        .axis-btn[data-axis="x"].active { background: #1a2f5a; border-color: #5080d0; color: #7aacf0; }
+        .axis-btn[data-axis="y"].active { background: #1a3a2a; border-color: #40c080; color: #60e0a0; }
+        .axis-btn[data-axis="z"].active { background: #3a2a10; border-color: #d08040; color: #f0a060; }
     </style>
 </head>
 <body>
@@ -462,6 +492,13 @@
             <span class="fi-meta" id="fi-meta"></span>
         </div>
 
+        <div id="axis-selector">
+            <span class="axis-label">Axis</span>
+            <button class="axis-btn active" data-axis="x" onclick="selectAxis('x')">X</button>
+            <button class="axis-btn" data-axis="y" onclick="selectAxis('y')">Y</button>
+            <button class="axis-btn" data-axis="z" onclick="selectAxis('z')">Z</button>
+        </div>
+
         <div id="viz-area">
             <div class="empty-state" id="empty-state">
                 <div class="big-icon">&#127925;</div>
@@ -509,11 +546,18 @@
 'use strict';
 
 // ── State ──────────────────────────────────────────────────────────────────
-let loadedSamples = null;
+let loadedSamples = null;      // single-axis fallback
+let loadedAxes = null;         // { x: Float32Array, y: Float32Array, z: Float32Array }
+let selectedAxis = 'x';        // active axis when multi-axis
 let loadedSampleRate = null;
 let loadedFilename = null;
 let spectrogramFrames = null;  // Float32Array[]
 let spectrogramMeta = null;    // { numFrames, numBins, hopSize, sampleRate, dbMin, dbMax }
+
+function getActiveSamples() {
+    if (loadedAxes) return loadedAxes[selectedAxis];
+    return loadedSamples;
+}
 
 // ── Colormaps ──────────────────────────────────────────────────────────────
 const COLORMAP_STOPS = {
@@ -628,9 +672,11 @@ function hannWindow(N) {
 // ── CSV Parsing ────────────────────────────────────────────────────────────
 function parseCSVText(text) {
     const lines = text.split('\n');
-    const samples = [];
     let detectedSR = null;
-    let headerChecked = false;
+    let headerParsed = false;
+    let colMap = {};
+    let isMulti = false;
+    const data = { x: [], y: [], z: [], t: [], single: [] };
 
     for (const raw of lines) {
         const line = raw.trim();
@@ -642,19 +688,46 @@ function parseCSVText(text) {
             continue;
         }
 
-        const cols = line.split(',');
-        const last = cols[cols.length - 1].trim();
+        const cols = line.split(',').map(c => c.trim());
 
-        if (!headerChecked) {
-            headerChecked = true;
-            if (isNaN(parseFloat(last))) continue; // skip header row
+        if (!headerParsed) {
+            headerParsed = true;
+            if (isNaN(parseFloat(cols[0]))) {
+                // Header row — map column names to indices
+                cols.forEach((name, i) => {
+                    const nl = name.toLowerCase();
+                    if (['t_s','t','time','timestamp'].includes(nl)) colMap.t = i;
+                    else if (['x_g','x','ax','accel_x','acc_x'].includes(nl)) colMap.x = i;
+                    else if (['y_g','y','ay','accel_y','acc_y'].includes(nl)) colMap.y = i;
+                    else if (['z_g','z','az','accel_z','acc_z'].includes(nl)) colMap.z = i;
+                });
+                isMulti = ('x' in colMap && 'y' in colMap && 'z' in colMap);
+                continue;
+            }
         }
 
-        const v = parseFloat(last);
-        if (!isNaN(v)) samples.push(v);
+        if (isMulti) {
+            const xv = parseFloat(cols[colMap.x]);
+            const yv = parseFloat(cols[colMap.y]);
+            const zv = parseFloat(cols[colMap.z]);
+            if (!isNaN(xv) && !isNaN(yv) && !isNaN(zv)) {
+                data.x.push(xv); data.y.push(yv); data.z.push(zv);
+                if ('t' in colMap) { const tv = parseFloat(cols[colMap.t]); if (!isNaN(tv)) data.t.push(tv); }
+            }
+        } else {
+            const v = parseFloat(cols[cols.length - 1]);
+            if (!isNaN(v)) data.single.push(v);
+        }
     }
 
-    return { samples, detectedSR };
+    // Derive sample rate from timestamps when not in metadata
+    if (!detectedSR && data.t.length >= 2) {
+        const dt = (data.t[data.t.length - 1] - data.t[0]) / (data.t.length - 1);
+        if (dt > 0) detectedSR = Math.round(1.0 / dt);
+    }
+
+    if (isMulti) return { axes: { x: data.x, y: data.y, z: data.z }, detectedSR };
+    return { samples: data.single, detectedSR };
 }
 
 // ── STFT Computation ───────────────────────────────────────────────────────
@@ -682,6 +755,8 @@ function computeSTFT(samples, fftSize, hopSize) {
 }
 
 // ── Rendering ──────────────────────────────────────────────────────────────
+const AXIS_COLORS = { x: '#5080d0', y: '#40c090', z: '#d08040', single: '#4080d0' };
+
 function drawWaveform(samples) {
     const canvas = document.getElementById('waveform-canvas');
     const W = canvas.offsetWidth || 800;
@@ -693,16 +768,25 @@ function drawWaveform(samples) {
     ctx.fillStyle = '#0c0c1e';
     ctx.fillRect(0, 0, W, H);
 
-    // Downsample for display
-    const step = Math.max(1, Math.floor(samples.length / W));
+    if (!samples || samples.length === 0) return;
+
     const midY = H / 2;
+    // Zero line
+    ctx.strokeStyle = 'rgba(255,255,255,0.1)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(0, midY); ctx.lineTo(W, midY);
+    ctx.stroke();
+
+    const step = Math.max(1, Math.floor(samples.length / W));
     let maxAmp = 0;
     for (let i = 0; i < samples.length; i++)
         if (Math.abs(samples[i]) > maxAmp) maxAmp = Math.abs(samples[i]);
     if (maxAmp === 0) maxAmp = 1;
     const scale = (H / 2 - 2) / maxAmp;
 
-    ctx.strokeStyle = '#4080d0';
+    const color = loadedAxes ? AXIS_COLORS[selectedAxis] : AXIS_COLORS.single;
+    ctx.strokeStyle = color;
     ctx.lineWidth = 1;
     ctx.beginPath();
     for (let x = 0; x < W; x++) {
@@ -711,12 +795,6 @@ function drawWaveform(samples) {
         if (x === 0) ctx.moveTo(x, midY - v);
         else ctx.lineTo(x, midY - v);
     }
-    ctx.stroke();
-
-    // Zero line
-    ctx.strokeStyle = 'rgba(255,255,255,0.1)';
-    ctx.beginPath();
-    ctx.moveTo(0, midY); ctx.lineTo(W, midY);
     ctx.stroke();
 }
 
@@ -844,28 +922,71 @@ function setProgress(pct) {
     fill.style.width = pct + '%';
 }
 
-function onSamplesLoaded(samples, sr, filename) {
-    loadedSamples = new Float32Array(samples);
-    loadedSampleRate = sr;
+function onDataLoaded(result, filename) {
     loadedFilename = filename;
+    loadedSampleRate = result.sample_rate || null;
+    spectrogramFrames = null;
+    spectrogramMeta = null;
+
+    if (result.axes) {
+        loadedAxes = {
+            x: new Float32Array(result.axes.x),
+            y: new Float32Array(result.axes.y),
+            z: new Float32Array(result.axes.z),
+        };
+        loadedSamples = null;
+        selectedAxis = 'x';
+        // Show axis selector, reset active button
+        const sel = document.getElementById('axis-selector');
+        sel.style.display = 'flex';
+        document.querySelectorAll('.axis-btn').forEach(btn => {
+            btn.classList.toggle('active', btn.dataset.axis === 'x');
+        });
+    } else {
+        loadedAxes = null;
+        loadedSamples = new Float32Array(result.samples);
+        document.getElementById('axis-selector').style.display = 'none';
+    }
+
+    const activeSamples = getActiveSamples();
+    const n = activeSamples.length;
+    const sr = loadedSampleRate;
 
     document.getElementById('empty-state').style.display = 'none';
     document.getElementById('waveform-section').style.display = 'block';
     document.getElementById('spectrogram-section').style.display = 'none';
 
     document.getElementById('fi-name').textContent = filename;
-    const dur = sr ? (samples.length / sr).toFixed(2) + ' s' : 'unknown duration';
+    const dur = sr ? (n / sr).toFixed(2) + ' s' : 'unknown duration';
     const srStr = sr ? sr.toLocaleString() + ' Hz' : 'SR unknown';
+    const axesNote = loadedAxes ? ' · 3 axes (X, Y, Z)' : '';
     document.getElementById('fi-meta').textContent =
-        `${samples.length.toLocaleString()} samples · ${srStr} · ${dur}`;
+        `${n.toLocaleString()} samples · ${srStr} · ${dur}${axesNote}`;
 
     if (sr && !document.getElementById('sample-rate').value)
         document.getElementById('sample-rate').placeholder = `detected: ${sr}`;
 
-    drawWaveform(loadedSamples);
+    drawWaveform(activeSamples);
     document.getElementById('btn-generate').disabled = false;
-    setStatus(`Loaded "${filename}" — ${samples.length.toLocaleString()} samples. Click Generate to render spectrogram.`);
+    setStatus(`Loaded "${filename}" — click Generate to render spectrogram.`);
     setProgress(null);
+}
+
+// Keep backward-compat alias used by old call sites
+function onSamplesLoaded(samples, sr, filename) {
+    onDataLoaded({ samples: Array.from(samples), sample_rate: sr }, filename);
+}
+
+// ── Axis switching ─────────────────────────────────────────────────────────
+function selectAxis(ax) {
+    if (!loadedAxes || selectedAxis === ax) return;
+    selectedAxis = ax;
+    document.querySelectorAll('.axis-btn').forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.axis === ax);
+    });
+    drawWaveform(getActiveSamples());
+    // Re-generate spectrogram if one is already shown
+    if (spectrogramFrames) generate();
 }
 
 // ── Load from server ───────────────────────────────────────────────────────
@@ -877,7 +998,7 @@ function loadServerFile(fname) {
         .then(data => {
             if (data.error) { setStatus('Error: ' + data.error); setProgress(null); return; }
             setProgress(80);
-            onSamplesLoaded(data.samples, data.sample_rate, data.filename);
+            onDataLoaded(data, data.filename);
         })
         .catch(err => { setStatus('Network error: ' + err); setProgress(null); });
 }
@@ -889,8 +1010,8 @@ function readLocalFile(file) {
     const reader = new FileReader();
     reader.onload = e => {
         setProgress(60);
-        const { samples, detectedSR } = parseCSVText(e.target.result);
-        onSamplesLoaded(samples, detectedSR, file.name);
+        const parsed = parseCSVText(e.target.result);
+        onDataLoaded({ axes: parsed.axes || null, samples: parsed.samples || null, sample_rate: parsed.detectedSR }, file.name);
     };
     reader.onerror = () => { setStatus('Error reading file.'); setProgress(null); };
     reader.readAsText(file);
@@ -917,7 +1038,8 @@ function handleDrop(evt) {
 
 // ── Generate spectrogram ───────────────────────────────────────────────────
 function generate() {
-    if (!loadedSamples) return;
+    const samples = getActiveSamples();
+    if (!samples) return;
 
     const srOverride = parseInt(document.getElementById('sample-rate').value) || null;
     const sr = srOverride || loadedSampleRate || 44100;
@@ -929,13 +1051,14 @@ function generate() {
     const dbMax = parseFloat(document.getElementById('db-max').value);
     const numBins = fftSize >> 1;
 
-    setStatus('Computing STFT…');
+    const axisLabel = loadedAxes ? ` [${selectedAxis.toUpperCase()} axis]` : '';
+    setStatus(`Computing STFT${axisLabel}…`);
     setProgress(10);
     document.getElementById('btn-generate').disabled = true;
 
     // Defer to let the UI update
     setTimeout(() => {
-        const frames = computeSTFT(loadedSamples, fftSize, hopSize);
+        const frames = computeSTFT(samples, fftSize, hopSize);
         setProgress(70);
 
         spectrogramFrames = frames;
@@ -952,7 +1075,8 @@ function generate() {
         document.getElementById('btn-generate').disabled = false;
 
         const dur = (frames.length * hopSize / sr).toFixed(2);
-        setStatus(`Spectrogram: ${frames.length} frames × ${numBins} bins · ${dur} s · FFT ${fftSize} · overlap ${overlapPct}%`);
+        const axisTag = loadedAxes ? ` · axis ${selectedAxis.toUpperCase()}` : '';
+        setStatus(`Spectrogram: ${frames.length} frames × ${numBins} bins · ${dur} s · FFT ${fftSize} · overlap ${overlapPct}%${axisTag}`);
         setProgress(null);
     }, 30);
 }
