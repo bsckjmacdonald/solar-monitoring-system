@@ -244,11 +244,14 @@ def get_acoustic_data(filename):
         return jsonify({'error': 'File not found'}), 404
 
     samples = []
+    x_samples, y_samples, z_samples, timestamps = [], [], [], []
     sample_rate = None
+    col_map = {}
 
     try:
         with open(filepath, 'r') as f:
-            header_checked = False
+            header_parsed = False
+            is_multi = False
             for line in f:
                 line = line.strip()
                 if not line:
@@ -265,20 +268,53 @@ def get_acoustic_data(filename):
                         except ValueError:
                             pass
                     continue
-                cols = line.split(',')
-                # Skip header row (non-numeric last column)
-                if not header_checked:
-                    header_checked = True
+                cols = [c.strip() for c in line.split(',')]
+                if not header_parsed:
+                    header_parsed = True
                     try:
-                        float(cols[-1])
+                        float(cols[0])
+                        # First column is numeric — no header, use last column fallback
                     except ValueError:
+                        # Header row — map column names
+                        for i, name in enumerate(cols):
+                            nl = name.lower()
+                            if nl in ('t_s', 't', 'time', 'timestamp'):
+                                col_map['t'] = i
+                            elif nl in ('x_g', 'x', 'ax', 'accel_x', 'acc_x'):
+                                col_map['x'] = i
+                            elif nl in ('y_g', 'y', 'ay', 'accel_y', 'acc_y'):
+                                col_map['y'] = i
+                            elif nl in ('z_g', 'z', 'az', 'accel_z', 'acc_z'):
+                                col_map['z'] = i
+                        is_multi = ('x' in col_map and 'y' in col_map and 'z' in col_map)
                         continue
                 try:
-                    samples.append(float(cols[-1]))
+                    if is_multi:
+                        x_samples.append(float(cols[col_map['x']]))
+                        y_samples.append(float(cols[col_map['y']]))
+                        z_samples.append(float(cols[col_map['z']]))
+                        if 't' in col_map and col_map['t'] < len(cols):
+                            timestamps.append(float(cols[col_map['t']]))
+                    else:
+                        samples.append(float(cols[-1]))
                 except (ValueError, IndexError):
                     pass
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
+    # Derive sample rate from timestamps when not in metadata
+    if not sample_rate and len(timestamps) >= 2:
+        dt = (timestamps[-1] - timestamps[0]) / (len(timestamps) - 1)
+        if dt > 0:
+            sample_rate = round(1.0 / dt)
+
+    if x_samples:
+        return jsonify({
+            'filename': filename,
+            'axes': {'x': x_samples, 'y': y_samples, 'z': z_samples},
+            'num_samples': len(x_samples),
+            'sample_rate': sample_rate,
+        })
 
     return jsonify({
         'filename': filename,
