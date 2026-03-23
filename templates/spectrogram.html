@@ -219,6 +219,15 @@
             height: 60px;
             display: block;
             border-radius: 3px;
+            cursor: pointer;
+        }
+        .zoom-hint {
+            font-size: 9px;
+            color: #3a4a6a;
+            font-weight: normal;
+            letter-spacing: 0;
+            text-transform: none;
+            margin-left: 8px;
         }
 
         /* Spectrogram */
@@ -507,17 +516,19 @@
 
             <div id="waveform-section" style="display:none">
                 <div class="section-title">Waveform</div>
-                <canvas id="waveform-canvas" height="60"></canvas>
+                <canvas id="waveform-canvas" height="60" onclick="handleWaveformClick(event)"></canvas>
             </div>
 
             <div id="spectrogram-section" style="display:none">
-                <div class="section-title">Spectrogram</div>
+                <div class="section-title">Spectrogram <span class="zoom-hint">scroll to zoom &middot; drag to pan &middot; double-click to reset</span></div>
                 <div id="spectrogram-layout">
                     <div id="freq-axis"></div>
                     <div id="spectrogram-wrapper">
                         <div id="canvas-container"
                              onmousemove="handleMouseMove(event)"
-                             onmouseleave="handleMouseLeave()">
+                             onmouseleave="handleMouseLeave()"
+                             onmousedown="handleMouseDown(event)"
+                             ondblclick="handleDblClick()">
                             <canvas id="spectrogram-canvas"></canvas>
                             <div id="cursor-line"></div>
                             <div id="freq-line"></div>
@@ -553,6 +564,12 @@ let loadedSampleRate = null;
 let loadedFilename = null;
 let spectrogramFrames = null;  // Float32Array[]
 let spectrogramMeta = null;    // { numFrames, numBins, hopSize, sampleRate, dbMin, dbMax }
+
+// ── View window (zoom / pan) ────────────────────────────────────────────────
+let viewStart = 0;   // fraction of total frames [0, 1]
+let viewEnd   = 1;
+let isPanning = false;
+let panStartX = 0, panStartVS = 0, panStartVE = 0;
 
 function getActiveSamples() {
     if (loadedAxes) return loadedAxes[selectedAxis];
@@ -796,6 +813,17 @@ function drawWaveform(samples) {
         else ctx.lineTo(x, midY - v);
     }
     ctx.stroke();
+
+    // View-window indicator: dim regions outside the current zoom window
+    if (spectrogramFrames && (viewStart > 0 || viewEnd < 1)) {
+        const x0 = viewStart * W, x1 = viewEnd * W;
+        ctx.fillStyle = 'rgba(0,0,0,0.5)';
+        if (x0 > 0) ctx.fillRect(0, 0, x0, H);
+        if (x1 < W) ctx.fillRect(x1, 0, W - x1, H);
+        ctx.strokeStyle = 'rgba(100,160,255,0.7)';
+        ctx.lineWidth = 1;
+        ctx.strokeRect(x0, 0.5, x1 - x0, H - 1);
+    }
 }
 
 function drawSpectrogram(frames, numBins, dbMin, dbMax, cmapName) {
@@ -845,6 +873,22 @@ function drawColorscale(dbMin, dbMax, cmapName) {
     document.getElementById('colorscale-label-min').textContent = dbMin + ' dB';
 }
 
+function redrawView() {
+    if (!spectrogramFrames || !spectrogramMeta) return;
+    const { numFrames, numBins, hopSize, sampleRate, dbMin, dbMax } = spectrogramMeta;
+    const cmapName = document.getElementById('colormap').value;
+
+    const sf = Math.floor(viewStart * numFrames);
+    const ef = Math.min(numFrames, Math.max(sf + 1, Math.ceil(viewEnd * numFrames)));
+    const slicedFrames = spectrogramFrames.slice(sf, ef);
+
+    drawSpectrogram(slicedFrames, numBins, dbMin, dbMax, cmapName);
+    buildTimeAxis(slicedFrames.length, hopSize, sampleRate, sf * hopSize / sampleRate);
+
+    const allSamples = getActiveSamples();
+    if (allSamples) drawWaveform(allSamples);
+}
+
 function buildFreqAxis(sampleRate, numBins) {
     const nyquist = sampleRate / 2;
     const el = document.getElementById('freq-axis');
@@ -858,13 +902,13 @@ function buildFreqAxis(sampleRate, numBins) {
     }
 }
 
-function buildTimeAxis(numFrames, hopSize, sampleRate) {
+function buildTimeAxis(numFrames, hopSize, sampleRate, startTime = 0) {
     const totalTime = (numFrames * hopSize) / sampleRate;
     const el = document.getElementById('time-axis');
     el.innerHTML = '';
     const steps = 6;
     for (let i = 0; i <= steps; i++) {
-        const t = (i / steps) * totalTime;
+        const t = startTime + (i / steps) * totalTime;
         const span = document.createElement('span');
         span.textContent = t.toFixed(2) + 's';
         el.appendChild(span);
@@ -881,12 +925,28 @@ function handleMouseMove(evt) {
     const xFrac = Math.max(0, Math.min(1, px / rect.width));
     const yFrac = Math.max(0, Math.min(1, py / rect.height));
 
-    const { numFrames, hopSize, sampleRate, numBins, dbMin, dbMax } = spectrogramMeta;
-    const timeS = xFrac * (numFrames * hopSize / sampleRate);
+    // Drag-pan
+    if (isPanning) {
+        const dx = (panStartX - evt.clientX) / rect.width;
+        const span = panStartVE - panStartVS;
+        let ns = panStartVS + dx * span;
+        let ne = panStartVE + dx * span;
+        if (ns < 0) { ne -= ns; ns = 0; }
+        if (ne > 1) { ns -= (ne - 1); ne = 1; }
+        viewStart = Math.max(0, ns);
+        viewEnd   = Math.min(1, ne);
+        redrawView();
+        return;
+    }
+
+    const { numFrames, hopSize, sampleRate, numBins } = spectrogramMeta;
+    const totalTime = numFrames * hopSize / sampleRate;
+    const viewFrac = viewStart + xFrac * (viewEnd - viewStart);
+    const timeS = viewFrac * totalTime;
     const freqHz = (1 - yFrac) * (sampleRate / 2);
 
-    // Lookup dB value
-    const frameIdx = Math.floor(xFrac * (numFrames - 1));
+    // Lookup dB value in the full frame array
+    const frameIdx = Math.round(viewFrac * (numFrames - 1));
     const binIdx = Math.floor((1 - yFrac) * (numBins - 1));
     const mag = spectrogramFrames[frameIdx]?.[binIdx] ?? 0;
     const db = mag > 1e-10 ? 20 * Math.log10(mag) : -120;
@@ -894,7 +954,6 @@ function handleMouseMove(evt) {
     document.getElementById('cursor-readout').textContent =
         `t = ${timeS.toFixed(3)} s   |   f = ${freqHz < 1000 ? freqHz.toFixed(1) + ' Hz' : (freqHz/1000).toFixed(2) + ' kHz'}   |   ${db.toFixed(1)} dB`;
 
-    // Cursor lines
     const cl = document.getElementById('cursor-line');
     cl.style.display = 'block';
     cl.style.left = px + 'px';
@@ -904,9 +963,64 @@ function handleMouseMove(evt) {
 }
 
 function handleMouseLeave() {
+    if (isPanning) return;  // keep cursor visible while panning outside
     document.getElementById('cursor-line').style.display = 'none';
     document.getElementById('freq-line').style.display = 'none';
     document.getElementById('cursor-readout').textContent = '';
+}
+
+function handleMouseDown(evt) {
+    if (!spectrogramFrames || evt.button !== 0) return;
+    isPanning = true;
+    panStartX  = evt.clientX;
+    panStartVS = viewStart;
+    panStartVE = viewEnd;
+    document.getElementById('canvas-container').style.cursor = 'grabbing';
+}
+
+function handleMouseUp() {
+    if (isPanning) {
+        isPanning = false;
+        document.getElementById('canvas-container').style.cursor = 'crosshair';
+    }
+}
+
+function handleDblClick() {
+    viewStart = 0;
+    viewEnd   = 1;
+    redrawView();
+}
+
+function handleWheel(evt) {
+    evt.preventDefault();
+    if (!spectrogramFrames) return;
+    const rect = evt.currentTarget.getBoundingClientRect();
+    const xFrac = Math.max(0, Math.min(1, (evt.clientX - rect.left) / rect.width));
+    const pivot = viewStart + xFrac * (viewEnd - viewStart);
+    const factor = evt.deltaY > 0 ? 1.3 : 1 / 1.3;
+    let ns = pivot - (pivot - viewStart) * factor;
+    let ne = pivot + (viewEnd   - pivot) * factor;
+    // Clamp to [0, 1] while preserving span where possible
+    if (ns < 0) { ne = Math.min(1, ne - ns); ns = 0; }
+    if (ne > 1) { ns = Math.max(0, ns - (ne - 1)); ne = 1; }
+    // Minimum window: 0.1% of total frames
+    const minSpan = 0.001;
+    if (ne - ns < minSpan) { const c = (ns + ne) / 2; ns = c - minSpan / 2; ne = c + minSpan / 2; }
+    viewStart = Math.max(0, ns);
+    viewEnd   = Math.min(1, ne);
+    redrawView();
+}
+
+// Click on waveform overview to re-center the view window at that point
+function handleWaveformClick(evt) {
+    if (!spectrogramFrames) return;
+    const canvas = document.getElementById('waveform-canvas');
+    const rect = canvas.getBoundingClientRect();
+    const xFrac = Math.max(0, Math.min(1, (evt.clientX - rect.left) / rect.width));
+    const span = viewEnd - viewStart;
+    viewStart = Math.max(0, Math.min(1 - span, xFrac - span / 2));
+    viewEnd   = viewStart + span;
+    redrawView();
 }
 
 // ── File loading helpers ───────────────────────────────────────────────────
@@ -927,6 +1041,8 @@ function onDataLoaded(result, filename) {
     loadedSampleRate = result.sample_rate || null;
     spectrogramFrames = null;
     spectrogramMeta = null;
+    viewStart = 0;
+    viewEnd   = 1;
 
     if (result.axes) {
         loadedAxes = {
@@ -1063,6 +1179,8 @@ function generate() {
 
         spectrogramFrames = frames;
         spectrogramMeta = { numFrames: frames.length, numBins, hopSize, sampleRate: sr, dbMin, dbMax };
+        viewStart = 0;
+        viewEnd   = 1;
 
         drawSpectrogram(frames, numBins, dbMin, dbMax, cmapName);
         setProgress(90);
@@ -1089,6 +1207,14 @@ function formatBytes(n) {
 }
 
 document.addEventListener('DOMContentLoaded', () => {
+    // Non-passive wheel listeners so preventDefault() works for zoom
+    document.getElementById('canvas-container')
+        .addEventListener('wheel', handleWheel, { passive: false });
+    document.getElementById('waveform-canvas')
+        .addEventListener('wheel', handleWheel, { passive: false });
+    // Global mouseup so drag-pan ends even if cursor leaves the canvas
+    document.addEventListener('mouseup', handleMouseUp);
+
     fetch('/api/acoustic/files')
         .then(r => r.json())
         .then(data => {
